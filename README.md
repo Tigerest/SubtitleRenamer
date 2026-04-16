@@ -21,9 +21,6 @@
 
 需要 Windows 和 .NET SDK 7.0 或更新版本。
 
-```powershell
-dotnet build -c Release
-```
 
 ## 配置
 
