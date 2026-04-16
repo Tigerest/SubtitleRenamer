@@ -25,26 +25,6 @@
 dotnet build -c Release
 ```
 
-发布为单文件 exe：
-
-```powershell
-dotnet publish -c Release -r win-x64 -p:PublishSingleFile=true --self-contained false -p:DebugType=None -p:DebugSymbols=false -o publish
-```
-
-发布后的文件位于：
-
-```text
-publish/SubtitleRenamer.exe
-```
-
-## 首次运行提示
-
-如果 Windows 提示“无法确认是谁创建了此文件”，通常是因为 exe 未签名或带有下载来源标记。自己使用时可以右键文件属性解除锁定，或运行：
-
-```powershell
-Unblock-File -LiteralPath ".\SubtitleRenamer.exe"
-```
-
 ## 配置
 
 语言后缀设置会保存在：
