@@ -1,0 +1,21 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net7.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <ApplicationIcon>app.ico</ApplicationIcon>
+    <AssemblyTitle>大河字幕重命名工具</AssemblyTitle>
+    <Product>大河字幕重命名工具</Product>
+    <Description>大河字幕重命名工具</Description>
+    <Company>大河李斯特视频工作室</Company>
+    <Authors>大河</Authors>
+    <Copyright>Copyright © 大河李斯特视频工作室</Copyright>
+    <Version>1.0.0</Version>
+    <FileVersion>1.0.0.0</FileVersion>
+    <AssemblyVersion>1.0.0.0</AssemblyVersion>
+  </PropertyGroup>
+
+</Project>

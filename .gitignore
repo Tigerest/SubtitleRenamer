@@ -1,0 +1,9 @@
+bin/
+obj/
+publish/
+*.user
+*.suo
+*.pdb
+*.log
+ui-check*.png
+
