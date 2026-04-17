@@ -89,6 +89,45 @@ internal sealed class OnlineSubtitleCache : IDisposable
         return added;
     }
 
+    public int RemoveSubtitles(IEnumerable<string> paths, bool deleteFiles)
+    {
+        var pathSet = paths.Select(Path.GetFullPath).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var removed = Subtitles.RemoveAll(item => pathSet.Contains(Path.GetFullPath(item.FullPath)));
+        foreach (var path in pathSet)
+        {
+            _knownSubtitlePaths.Remove(path);
+            if (!deleteFiles)
+            {
+                continue;
+            }
+
+            try
+            {
+                if (File.Exists(path))
+                {
+                    File.Delete(path);
+                    DeleteEmptyParents(Path.GetDirectoryName(path));
+                }
+            }
+            catch
+            {
+                // The UI list should still be cleaned up if a cached file is locked.
+            }
+        }
+
+        if (removed > 0)
+        {
+            SaveManifest();
+        }
+
+        return removed;
+    }
+
+    public void Save()
+    {
+        SaveManifest();
+    }
+
     public void Dispose()
     {
         if (_disposed)
@@ -163,5 +202,20 @@ internal sealed class OnlineSubtitleCache : IDisposable
         return string.IsNullOrWhiteSpace(relative) || relative == "."
             ? "根目录"
             : relative.Replace(Path.DirectorySeparatorChar, '/').Replace(Path.AltDirectorySeparatorChar, '/');
+    }
+
+    private static void DeleteEmptyParents(string? directory)
+    {
+        while (!string.IsNullOrWhiteSpace(directory) && Directory.Exists(directory))
+        {
+            if (Directory.EnumerateFileSystemEntries(directory).Any())
+            {
+                return;
+            }
+
+            var parent = Directory.GetParent(directory)?.FullName;
+            Directory.Delete(directory);
+            directory = parent;
+        }
     }
 }

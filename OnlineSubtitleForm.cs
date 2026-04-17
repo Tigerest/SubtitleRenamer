@@ -16,6 +16,7 @@ internal sealed class OnlineSubtitleForm : Form
     private Button _importButton = null!;
     private Button _checkSelectedButton = null!;
     private Button _uncheckSelectedButton = null!;
+    private Button _deleteSelectedButton = null!;
     private TreeView _resultTree = null!;
     private DataGridView _subtitleGrid = null!;
     private Label _statusLabel = null!;
@@ -386,8 +387,10 @@ internal sealed class OnlineSubtitleForm : Form
         buttons.Controls.Add(CreateButton("全不选", (_, _) => SetAllSubtitleChecks(false)));
         _checkSelectedButton = CreateButton("勾选", (_, _) => SetSelectedSubtitleChecks(true));
         _uncheckSelectedButton = CreateButton("取消勾选", (_, _) => SetSelectedSubtitleChecks(false));
+        _deleteSelectedButton = CreateButton("删除选中", (_, _) => DeleteSelectedSubtitles());
         buttons.Controls.Add(_uncheckSelectedButton);
         buttons.Controls.Add(_checkSelectedButton);
+        buttons.Controls.Add(_deleteSelectedButton);
         layout.Controls.Add(buttons, 0, 1);
 
         group.Controls.Add(layout);
@@ -401,7 +404,7 @@ internal sealed class OnlineSubtitleForm : Form
         {
             Text = text,
             AutoSize = false,
-            Size = new Size(text.Length > 4 ? 124 : 82, 34),
+            Size = new Size(text.Length >= 4 ? 124 : 82, 34),
             Margin = new Padding(8, 3, 0, 5),
             FlatStyle = FlatStyle.Flat,
             BackColor = Color.White,
@@ -865,6 +868,78 @@ internal sealed class OnlineSubtitleForm : Form
         _statusLabel.Text = $"已导入 {selected.Count} 个字幕到主窗口。";
     }
 
+    public void ResetImportedState(IEnumerable<string>? paths = null)
+    {
+        var pathSet = paths?.Select(Path.GetFullPath).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var changed = false;
+        foreach (var item in _cache.Subtitles)
+        {
+            if (pathSet is not null && !pathSet.Contains(Path.GetFullPath(item.FullPath)))
+            {
+                continue;
+            }
+
+            if (item.Imported)
+            {
+                item.Imported = false;
+                changed = true;
+            }
+        }
+
+        if (!changed)
+        {
+            return;
+        }
+
+        _cache.Save();
+        RefreshSubtitleGrid();
+    }
+
+    private void DeleteSelectedSubtitles()
+    {
+        var selected = GetSelectedSubtitleItems();
+        if (selected.Count == 0)
+        {
+            MessageBox.Show(this, "请先选择要删除的已解压字幕。", "没有选中字幕", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+
+        var confirm = MessageBox.Show(this, $"删除选中的 {selected.Count} 个已解压字幕？", "确认删除",
+            MessageBoxButtons.OKCancel, MessageBoxIcon.Question);
+        if (confirm != DialogResult.OK)
+        {
+            return;
+        }
+
+        var paths = selected.Select(item => item.FullPath).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        var removed = _cache.RemoveSubtitles(paths, deleteFiles: true);
+        foreach (var path in paths)
+        {
+            _checkedSubtitlePaths.Remove(path);
+        }
+
+        RefreshSubtitleGrid();
+        _statusLabel.Text = $"已删除 {removed} 个已解压字幕。";
+    }
+
+    private List<OnlineSubtitleItem> GetSelectedSubtitleItems()
+    {
+        var result = new List<OnlineSubtitleItem>();
+        foreach (DataGridViewRow row in _subtitleGrid.SelectedRows)
+        {
+            if (row.Tag is OnlineSubtitleItem item)
+            {
+                result.Add(item);
+            }
+            else if (row.Tag is List<OnlineSubtitleItem> groupItems)
+            {
+                result.AddRange(groupItems);
+            }
+        }
+
+        return result.DistinctBy(item => item.FullPath).ToList();
+    }
+
     private void UpdateDownloadProgress(AcgripDownloadProgress progress)
     {
         if (progress.TotalBytes is > 0)
@@ -895,6 +970,7 @@ internal sealed class OnlineSubtitleForm : Form
         _importButton.Enabled = !busy;
         _checkSelectedButton.Enabled = !busy;
         _uncheckSelectedButton.Enabled = !busy;
+        _deleteSelectedButton.Enabled = !busy;
         if (busy)
         {
             Cursor = Cursors.WaitCursor;

@@ -554,8 +554,16 @@ public partial class Form1 : Form
 
     private void ImportOnlineSubtitles(IReadOnlyList<string> paths)
     {
+        ForceRenameOriginalMode();
         var stats = AddPaths(paths, ImportKind.SubtitleOnly, FileSource.Online);
         ResetPreview($"在线搜索导入：字幕 {stats.Subtitles} 个，重复 {stats.Duplicates} 个，排除 {stats.Ignored} 个。");
+    }
+
+    private void ForceRenameOriginalMode()
+    {
+        _createHardlink.AutoCheck = true;
+        _createHardlink.Checked = false;
+        _renameOriginal.Checked = true;
     }
 
     private void CleanupOnlineSubtitleCache()
@@ -858,6 +866,7 @@ public partial class Form1 : Form
 
         _videos.Clear();
         _subtitles.Clear();
+        _onlineSubtitleForm?.ResetImportedState();
         RefreshAll("列表已清空。");
     }
 
@@ -990,6 +999,11 @@ public partial class Form1 : Form
             return;
         }
 
+        if (!videoList)
+        {
+            _onlineSubtitleForm?.ResetImportedState(list.Where(item => item.Source == FileSource.Online).Select(item => item.FullPath));
+        }
+
         list.Clear();
         RefreshAll($"{label}列表已清空。");
     }
@@ -1025,7 +1039,13 @@ public partial class Form1 : Form
         }
 
         var index = grid.CurrentRow.Index;
+        var removed = list[index];
         list.RemoveAt(index);
+        if (!videoList && removed.Source == FileSource.Online)
+        {
+            _onlineSubtitleForm?.ResetImportedState(new[] { removed.FullPath });
+        }
+
         RefreshAll(videoList ? "已从视频列表移除。" : "已从字幕列表移除。");
         if (list.Count > 0)
         {
@@ -1081,7 +1101,8 @@ public partial class Form1 : Form
         _toolTip.SetToolTip(_createHardlink, hasOnlineSubtitle ? "在线搜索模式下不支持硬链接" : "");
         if (hasOnlineSubtitle && _createHardlink.Checked)
         {
-            _renameOriginal.Checked = true;
+            ForceRenameOriginalMode();
+            _createHardlink.AutoCheck = false;
         }
     }
 
@@ -1798,7 +1819,7 @@ public partial class Form1 : Form
                 continue;
             }
 
-            var dotMatch = Regex.Match(text, @"(?<prefix>.*?)[\._ ](?<token>[^._ ]+)\s*$");
+            var dotMatch = Regex.Match(text, @"(?<prefix>.*?)[\._\-\s](?<token>[^._\s]+)\s*$");
             if (!dotMatch.Success)
             {
                 break;
@@ -1807,7 +1828,20 @@ public partial class Form1 : Form
             var dotToken = CleanToken(dotMatch.Groups["token"].Value);
             if (!IsSuffixToken(dotToken))
             {
-                break;
+                if (!TryExtractTrailingLanguageToken(dotToken, out var tailToken))
+                {
+                    break;
+                }
+
+                tokens.Insert(0, tailToken);
+                var trimmed = TrimOneTailToken(text, tailToken);
+                if (string.Equals(trimmed, text, StringComparison.OrdinalIgnoreCase))
+                {
+                    break;
+                }
+
+                text = trimmed;
+                continue;
             }
 
             tokens.Insert(0, dotToken);
@@ -1840,6 +1874,30 @@ public partial class Form1 : Form
         }
 
         return Regex.IsMatch(token, @"^[A-Z][A-Z0-9]{1,11}$") && !IgnoredSuffixTokens.Contains(token);
+    }
+
+    private static bool TryExtractTrailingLanguageToken(string token, out string languageToken)
+    {
+        var clean = CleanToken(token);
+        if (LanguageTokens.Contains(clean) && !IgnoredSuffixTokens.Contains(clean))
+        {
+            languageToken = clean;
+            return true;
+        }
+
+        var parts = clean.Split(new[] { '.', '_', '-', '&', '+', ' ' }, StringSplitOptions.RemoveEmptyEntries);
+        for (var i = parts.Length - 1; i >= 0; i--)
+        {
+            var part = CleanToken(parts[i]);
+            if (LanguageTokens.Contains(part) && !IgnoredSuffixTokens.Contains(part))
+            {
+                languageToken = part;
+                return true;
+            }
+        }
+
+        languageToken = "";
+        return false;
     }
 
     private static string CleanToken(string token)
