@@ -161,8 +161,8 @@ internal sealed class LanguageSettingsDialog : Form
     {
         return new List<LanguageRule>
         {
-            new("简体中文", ".chs", ".sc,.chs,.gb,.gbk,.zh-cn,.zh-hans,.zh-sg,.cn,.简,.简体,.简中"),
-            new("繁体中文", ".cht", ".tc,.cht,.big5,.zh-tw,.zh-hant,.zh-hk,.繁,.繁体,.繁中"),
+            new("简体中文", ".chs", ".sc,.chs,.gb,.gbk,.zh-cn,.zh-hans,.zh-sg,.cn,.简,.简体,.简中,.JPSC,.chs&jpn"),
+            new("繁体中文", ".cht", ".tc,.cht,.big5,.zh-tw,.zh-hant,.zh-hk,.繁,.繁体,.繁中,.JPTC,.cht&jpn"),
             new("日文", ".jpn", ".jpn,.jp,.ja,.japanese,.日,.日文,.日语"),
             new("英文", ".eng", ".eng,.en,.english,.英文,.英语")
         };

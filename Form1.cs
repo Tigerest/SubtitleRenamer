@@ -28,6 +28,10 @@ public partial class Form1 : Form
     private CheckBox _overwriteExisting = null!;
     private CheckBox _topMost = null!;
     private Label _statusLabel = null!;
+    private ToolTip _toolTip = null!;
+    private OnlineSubtitleCache? _onlineSubtitleCache;
+    private OnlineSubtitleForm? _onlineSubtitleForm;
+    private bool _hardlinkBlockedByOnlineSubtitles;
 
     private static readonly HashSet<string> VideoExtensions = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -76,6 +80,7 @@ public partial class Form1 : Form
         _languageRules = LoadLanguageRules();
         RegisterLanguageTokens(_languageRules);
         BuildUi();
+        FormClosed += (_, _) => CleanupOnlineSubtitleCache();
         RefreshAll("拖入视频和字幕文件，或使用上方按钮导入。");
     }
 
@@ -110,6 +115,7 @@ public partial class Form1 : Form
         root.RowStyles.Add(new RowStyle(SizeType.Percent, 52));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 96));
         Controls.Add(root);
+        _toolTip = new ToolTip { ShowAlways = true };
 
         root.Controls.Add(BuildToolbar(), 0, 0);
         root.Controls.Add(BuildListsArea(), 0, 1);
@@ -131,6 +137,7 @@ public partial class Form1 : Form
         panel.Controls.Add(CreateButton("导入视频", (_, _) => ImportByDialog(true)));
         panel.Controls.Add(CreateButton("导入字幕", (_, _) => ImportByDialog(false)));
         panel.Controls.Add(CreateButton("导入文件夹", (_, _) => ImportFolder()));
+        panel.Controls.Add(CreateButton("在线查找", (_, _) => OpenOnlineSubtitleSearch()));
         panel.Controls.Add(CreateButton("语言后缀", (_, _) => OpenLanguageSettings()));
         panel.Controls.Add(CreateButton("清空全部", (_, _) => ClearAll()));
         panel.Controls.Add(CreateButton("预览重置", (_, _) => ResetPreview("预览调整已重置。")));
@@ -328,6 +335,16 @@ public partial class Form1 : Form
             AutoSize = true,
             Margin = new Padding(0, 4, 18, 0)
         };
+        _createHardlink.Click += (_, _) =>
+        {
+            if (!_hardlinkBlockedByOnlineSubtitles)
+            {
+                return;
+            }
+
+            _renameOriginal.Checked = true;
+            _statusLabel.Text = "在线搜索模式下不支持硬链接。";
+        };
         panel.Controls.Add(_createHardlink);
 
         var rightOptions = new FlowLayoutPanel
@@ -508,6 +525,56 @@ public partial class Form1 : Form
 
         var stats = AddPaths(new[] { dialog.SelectedPath }, ImportKind.Mixed);
         RefreshAll(BuildImportMessage(stats));
+    }
+
+    private void OpenOnlineSubtitleSearch()
+    {
+        _onlineSubtitleCache ??= new OnlineSubtitleCache();
+        if (_onlineSubtitleForm is null || _onlineSubtitleForm.IsDisposed)
+        {
+            _onlineSubtitleForm = new OnlineSubtitleForm(
+                _onlineSubtitleCache,
+                GuessDefaultOnlineSearchQuery,
+                ImportOnlineSubtitles);
+        }
+
+        _onlineSubtitleForm.PrepareDefaultQuery();
+        if (!_onlineSubtitleForm.Visible)
+        {
+            _onlineSubtitleForm.Show(this);
+        }
+
+        _onlineSubtitleForm.Activate();
+    }
+
+    private string GuessDefaultOnlineSearchQuery()
+    {
+        return _videos.Count == 0 ? "" : TitleGuess.GuessFromVideoName(_videos[0].Name);
+    }
+
+    private void ImportOnlineSubtitles(IReadOnlyList<string> paths)
+    {
+        var stats = AddPaths(paths, ImportKind.SubtitleOnly, FileSource.Online);
+        ResetPreview($"在线搜索导入：字幕 {stats.Subtitles} 个，重复 {stats.Duplicates} 个，排除 {stats.Ignored} 个。");
+    }
+
+    private void CleanupOnlineSubtitleCache()
+    {
+        try
+        {
+            if (_onlineSubtitleForm is not null && !_onlineSubtitleForm.IsDisposed)
+            {
+                _onlineSubtitleForm.CloseForApplicationExit();
+                _onlineSubtitleForm.Dispose();
+            }
+        }
+        catch
+        {
+            // Closing the main window should not be blocked by an auxiliary window.
+        }
+
+        _onlineSubtitleCache?.Dispose();
+        _onlineSubtitleCache = null;
     }
 
     private void HandleDragEnter(object? sender, DragEventArgs e)
@@ -694,7 +761,7 @@ public partial class Form1 : Form
         }
     }
 
-    private ImportStats AddPaths(IEnumerable<string> paths, ImportKind kind)
+    private ImportStats AddPaths(IEnumerable<string> paths, ImportKind kind, FileSource source = FileSource.Local)
     {
         var stats = new ImportStats();
         foreach (var path in ExpandPaths(paths))
@@ -702,7 +769,7 @@ public partial class Form1 : Form
             var extension = Path.GetExtension(path);
             if (VideoExtensions.Contains(extension) && kind != ImportKind.SubtitleOnly)
             {
-                if (AddUnique(_videos, path))
+                if (AddUnique(_videos, path, FileSource.Local))
                 {
                     stats.Videos++;
                 }
@@ -713,7 +780,7 @@ public partial class Form1 : Form
             }
             else if (SubtitleExtensions.Contains(extension) && kind != ImportKind.VideoOnly)
             {
-                if (AddUnique(_subtitles, path))
+                if (AddUnique(_subtitles, path, source))
                 {
                     stats.Subtitles++;
                 }
@@ -729,7 +796,7 @@ public partial class Form1 : Form
         }
 
         _videos.Sort(FileItem.CompareByName);
-        _subtitles.Sort(FileItem.CompareByName);
+        _subtitles.Sort(CompareSubtitleByCanonicalName);
         return stats;
     }
 
@@ -765,7 +832,7 @@ public partial class Form1 : Form
         }
     }
 
-    private static bool AddUnique(List<FileItem> list, string path)
+    private static bool AddUnique(List<FileItem> list, string path, FileSource source = FileSource.Local)
     {
         var fullPath = Path.GetFullPath(path);
         if (list.Any(item => string.Equals(item.FullPath, fullPath, StringComparison.OrdinalIgnoreCase)))
@@ -773,7 +840,7 @@ public partial class Form1 : Form
             return false;
         }
 
-        list.Add(new FileItem(fullPath));
+        list.Add(new FileItem(fullPath, source));
         return true;
     }
 
@@ -831,8 +898,80 @@ public partial class Form1 : Form
     private void SortList(bool videoList)
     {
         var list = videoList ? _videos : _subtitles;
-        list.Sort(FileItem.CompareByName);
+        if (videoList)
+        {
+            list.Sort(FileItem.CompareByName);
+        }
+        else
+        {
+            list.Sort(CompareSubtitleByCanonicalName);
+        }
+
         ResetPreview(videoList ? "视频列表已重置排序，预览已重置。" : "字幕列表已重置排序，预览已重置。");
+    }
+
+    private int CompareSubtitleByCanonicalName(FileItem left, FileItem right)
+    {
+        var leftKey = BuildCanonicalSubtitleSortKey(left.FullPath);
+        var rightKey = BuildCanonicalSubtitleSortKey(right.FullPath);
+        var nameCompare = StringComparer.CurrentCultureIgnoreCase.Compare(leftKey, rightKey);
+        return nameCompare != 0
+            ? nameCompare
+            : FileItem.CompareByName(left, right);
+    }
+
+    private string BuildCanonicalSubtitleSortKey(string path)
+    {
+        var stem = Path.GetFileNameWithoutExtension(path);
+        var extension = Path.GetExtension(path);
+        var detected = DetectSuffixFromSubtitleName(path);
+        var canonicalLanguageSuffix = CanonicalizeLanguageSuffix(detected);
+        if (detected.Length == 0 || canonicalLanguageSuffix.Length == 0)
+        {
+            return Path.GetFileName(path);
+        }
+
+        var baseStem = TrimDetectedTailSuffix(stem, detected);
+        return baseStem + canonicalLanguageSuffix + extension;
+    }
+
+    private static string TrimDetectedTailSuffix(string stem, string detectedSuffix)
+    {
+        var text = stem;
+        var tokens = detectedSuffix
+            .TrimStart('.')
+            .Split('.', StringSplitOptions.RemoveEmptyEntries)
+            .Reverse();
+
+        foreach (var token in tokens)
+        {
+            text = TrimOneTailToken(text, token);
+        }
+
+        return text.TrimEnd('.', ' ', '_', '-');
+    }
+
+    private static string TrimOneTailToken(string text, string token)
+    {
+        var escaped = Regex.Escape(token);
+        var bracketMatch = Regex.Match(text, $@"(?:[\[\(【（]\s*{escaped}\s*[\]\)】）])\s*$", RegexOptions.IgnoreCase);
+        if (bracketMatch.Success)
+        {
+            return text[..bracketMatch.Index].TrimEnd('.', ' ', '_', '-');
+        }
+
+        var delimiterMatch = Regex.Match(text, $@"(?<prefix>.*?)[\._\-\s]+{escaped}\s*$", RegexOptions.IgnoreCase);
+        if (delimiterMatch.Success)
+        {
+            return delimiterMatch.Groups["prefix"].Value.TrimEnd('.', ' ', '_', '-');
+        }
+
+        if (text.Length == token.Length && string.Equals(text, token, StringComparison.OrdinalIgnoreCase))
+        {
+            return "";
+        }
+
+        return text;
     }
 
     private void ClearList(bool videoList)
@@ -911,6 +1050,7 @@ public partial class Form1 : Form
         FillFileGrid(_videoGrid, _videos);
         FillFileGrid(_subtitleGrid, _subtitles);
         FillPreviewGrid();
+        UpdateHardlinkAvailability();
         if (!string.IsNullOrWhiteSpace(message))
         {
             _statusLabel.Text = message;
@@ -922,7 +1062,26 @@ public partial class Form1 : Form
         grid.Rows.Clear();
         for (var i = 0; i < items.Count; i++)
         {
-            grid.Rows.Add(i + 1, items[i].Name, items[i].DirectoryName);
+            var name = items[i].Source == FileSource.Online ? "[在线] " + items[i].Name : items[i].Name;
+            grid.Rows.Add(i + 1, name, items[i].DirectoryName);
+        }
+    }
+
+    private void UpdateHardlinkAvailability()
+    {
+        if (_createHardlink is null || _renameOriginal is null)
+        {
+            return;
+        }
+
+        var hasOnlineSubtitle = _subtitles.Any(item => item.Source == FileSource.Online);
+        _hardlinkBlockedByOnlineSubtitles = hasOnlineSubtitle;
+        _createHardlink.AutoCheck = !hasOnlineSubtitle;
+        _createHardlink.ForeColor = hasOnlineSubtitle ? Color.FromArgb(150, 150, 150) : Color.FromArgb(32, 38, 46);
+        _toolTip.SetToolTip(_createHardlink, hasOnlineSubtitle ? "在线搜索模式下不支持硬链接" : "");
+        if (hasOnlineSubtitle && _createHardlink.Checked)
+        {
+            _renameOriginal.Checked = true;
         }
     }
 
@@ -1036,7 +1195,7 @@ public partial class Form1 : Form
         }
 
         var sortedSubtitles = _subtitles
-            .OrderBy(item => item, Comparer<FileItem>.Create(FileItem.CompareByName))
+            .OrderBy(item => item, Comparer<FileItem>.Create(CompareSubtitleByCanonicalName))
             .ToList();
         var distinctSuffixCount = sortedSubtitles
             .Select(GetEffectiveSuffixForGrouping)
@@ -1399,7 +1558,7 @@ public partial class Form1 : Form
             }
         }
 
-        _subtitles.Sort(FileItem.CompareByName);
+        _subtitles.Sort(CompareSubtitleByCanonicalName);
         RefreshAll($"完成：成功 {successes} 个，已同名 {noOps} 个，失败 {errors.Count} 个。");
 
         if (errors.Count > 0)
@@ -1769,8 +1928,8 @@ public partial class Form1 : Form
     {
         return new List<LanguageRule>
         {
-            new("简体中文", ".chs", ".sc,.chs,.gb,.gbk,.zh-cn,.zh-hans,.zh-sg,.cn,.简,.简体,.简中"),
-            new("繁体中文", ".cht", ".tc,.cht,.big5,.zh-tw,.zh-hant,.zh-hk,.繁,.繁体,.繁中"),
+            new("简体中文", ".chs", ".sc,.chs,.gb,.gbk,.zh-cn,.zh-hans,.zh-sg,.cn,.简,.简体,.简中,.JPSC,.chs&jpn"),
+            new("繁体中文", ".cht", ".tc,.cht,.big5,.zh-tw,.zh-hant,.zh-hk,.繁,.繁体,.繁中,.JPTC,.cht&jpn"),
             new("日文", ".jpn", ".jpn,.jp,.ja,.japanese,.日,.日文,.日语"),
             new("英文", ".eng", ".eng,.en,.english,.英文,.英语")
         };
@@ -1852,7 +2011,7 @@ public partial class Form1 : Form
         SubtitleOnly
     }
 
-    private sealed record FileItem(string FullPath)
+    private sealed record FileItem(string FullPath, FileSource Source = FileSource.Local)
     {
         public string Name => Path.GetFileName(FullPath);
         public string DirectoryName => Path.GetDirectoryName(FullPath) ?? "";
